@@ -197,14 +197,15 @@ class QAgent:
     def predict_action_sequences_new(self, index, states, env):
         actions_list = [[] for _ in range(self.Sage_num_layers)]
         new_states = states
-        epsilon = self.epsilons[min(self.total_t, self.epsilon_decay_steps - 1)]  # 设置随机探索率 100 ，训练一次则执行衰减的浮点值，衰减到0，以至于最后进行测试的时候全凭q网络取动作值
+        epsilon = self.epsilons[min(self.total_t, self.epsilon_decay_steps - 1)]  # 设置随机探索率衰减到0
+        epsilon = 0
         self.total_t += 1  # 衰减
         for actions_sub_list in actions_list:
             actions = self.eval_step(new_states)  # 返回一个批次的预测动作
             best_actions = [act if np.random.rand() > epsilon else np.random.randint(0, 10) for act in actions]
             actions_sub_list.extend(best_actions)
             sample_result = env.model.sampling(index, best_actions)  # 针对索引列表内节点使用预测出来的最佳采样数量策略进行采样
-            new_states = env.init_states[sample_result]
+            new_states = env.init_states[sample_result]  # TODO: 为什么每次将采样结果输入的新状态后得到的新动作都是一样的值？？因为新状态变为稀疏矩阵了！！！！！！！！！！
             index = sample_result  # 传递采样结果索引到下一层
         return actions_list  # 改造返回最佳动作的多重列表
 

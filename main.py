@@ -35,7 +35,7 @@ parser.add_argument('--update_target_estimator_every', type=int, default=10)  # 
 parser.add_argument('--discount_factor', type=float, default=0.9)  # 折扣因子，用于计算未来奖励的现值。
 parser.add_argument('--max_sample_num', type=int, default=10)  # 最多选取十个数量的邻居选取动作
 parser.add_argument('--mlp_layers', type=list, default=[256, 128, 64])  # 定义qnet中MLP的每层神经元数量
-parser.add_argument('--max_episodes', type=int, default=100)  # 总周期数
+parser.add_argument('--max_episodes', type=int, default=1000)  # 总周期数
 parser.add_argument('--max_timesteps', type=int, default=20)  # 每个周期填充 30 批次经验(30*135)
 
 parser.add_argument('--epochs', type=int, default=100)  # GNN训练轮次

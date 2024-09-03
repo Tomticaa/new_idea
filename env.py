@@ -16,6 +16,7 @@ Project Description：
     # TODO: 奖励应该能够区分不同动作的优劣；同时考虑短期和长期的回报
     # TODO: 合理设定终止条件，使得智能体在探索有效状态空间时可以得到足够的经验，同时防止过早或过晚的终止。
     # TODO: 检查 q 网络是否编写失误
+    # TODO: 重大发现：原始状态节点原始特征过稀疏 ，状态转移之后都为连续向量，导致动作选择单一，数据预处理或者状态转移归一化；
 """
 import torch
 import random
@@ -178,10 +179,10 @@ class Sage_env:
         print("The data has been loaded! ")
 
     def reset(self):
-        # scr_index = np.random.choice(self.idx_train, int(len(self.idx_train)*0.1), replace=False)
-        # states = self.init_states[scr_index]  # TODO:是否应该采用随机采样，缩小基础空间容量？？
-        scr_index = self.idx_train
-        states = self.init_states[scr_index]
+        scr_index = np.random.choice(self.idx_train, int(len(self.idx_train)*0.1), replace=False)
+        states = self.init_states[scr_index]  # TODO:是否应该采用随机采样，缩小基础空间容量？？
+        # scr_index = self.idx_train
+        # states = self.init_states[scr_index]
         self.optimizer.zero_grad()
         # self.reset_parameters()  # TODO: 是否应该重置模型参数，不重置环境验证集准确率更高，但是会为dqn学习到更好的拟合效果么
         return scr_index, states
@@ -200,7 +201,7 @@ class Sage_env:
         loss, accuracy, pred_rights = self.train(actions, scr_index)
         if not dqn_train_tag:  # 仅仅执行 指导 GNN 训练，仅返回 loss 不再进行额外运算
             return loss, accuracy
-        # 在训练集上的分类损失达到0.01一下则设置为终止状态
+        # 在训练集上的分类损失达到 0.01 一下则设置为终止状态
         if loss < 0.01:  # plan3
             done = True
         dones = [done] * len(actions[0])
