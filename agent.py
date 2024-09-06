@@ -8,18 +8,8 @@ Date    ：2024/9/2 下午5:12
 Project ：new_idea 
 Project Description：
         定义 DQN 智能体：定义动作值函数，作用：将节点特征作为节点状态，输出动作为int；
-    TODO： 智能体：Q网络训练无效，输出状态仅为单值 ，奖励，损失颠簸剧烈。修复 qnet 使之承担作用
-
-    TODO： 奖励，终止状态应该怎么定义
-    TODO： 为什么训练好的网络面对不同状态只输出一个值啊？？
-    1. 执行轮次较少：网络训练不充分
-    2. 学习率？
-    3. 过度随机探索
-    4. 每次采样得到的样本过于相似
-    5. q值计算失误或者目标网络更新不及时
-    6. 奖励尺度过大过小不明确等等
-    7. 过早终止和不合理奖励：奖励设置过于激进
-    例如：只要稍微达到目标就给很高的奖励），会导致网络过早地收敛到某些特定的策略，从而对其他状态的探索不足，输出的Q值也会趋于一致。
+        TODO: 1，平衡原始特征与聚合之后特征的差异，抚平在 q 网络进行预测的过程中输入原始特征与聚合后的节点的特征后得到 q 值分布的差异；
+        TODO：2， 设置多尺度奖励，避免单一尺度奖励使简单达成目标使 q 网络不能学习到更具体的策略，纠正仅输出单一动作的缺点；
 """
 # -*- coding: UTF-8 -*-
 
@@ -30,6 +20,9 @@ import torch.nn as nn
 from copy import deepcopy
 from collections import namedtuple
 
+random.seed(64)
+np.random.seed(64)
+torch.manual_seed(64)
 Transition = namedtuple('Transition', ['state', 'action', 'reward', 'next_state', 'done'])  # 定义经验
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -160,7 +153,7 @@ class QAgent:
             transition = zip(states, actions[0], rewards, next_states, dones)  # 仅仅将第一层针对源节点采取的行动加入经验进行训练
             for ts in transition:
                 self.feed(ts)
-            states = next_states  # 进行时间步次的状态转移
+            states = next_states  # 进行时间步 次的状态转移
             print("reward :{}".format(r))
             Cumulative_rewards += r
         loss = self.train()
@@ -179,6 +172,7 @@ class QAgent:
         actions_list = [[] for _ in range(self.Sage_num_layers)]
         new_states = states  # 接收状态
         epsilon = self.epsilons[min(self.total_t, self.epsilon_decay_steps - 1)]  # 设置随机探索率
+
         for actions in actions_list:  # 对于每层的采样列表 该循环执行三次
             action_probability = np.ones(self.max_sample_num, dtype=float) * epsilon / self.max_sample_num  # 0~9 的 np
             best_action = self.eval_step(new_states)  # 返回值为 0~9 的一维数组
@@ -198,7 +192,7 @@ class QAgent:
         actions_list = [[] for _ in range(self.Sage_num_layers)]
         new_states = states
         epsilon = self.epsilons[min(self.total_t, self.epsilon_decay_steps - 1)]  # 设置随机探索率衰减到0
-        epsilon = 0
+        epsilon = 0  # TODO：用于排查问题
         self.total_t += 1  # 衰减
         for actions_sub_list in actions_list:
             actions = self.eval_step(new_states)  # 返回一个批次的预测动作
@@ -206,7 +200,7 @@ class QAgent:
             actions_sub_list.extend(best_actions)
             sample_result = env.model.sampling(index, best_actions)  # 针对索引列表内节点使用预测出来的最佳采样数量策略进行采样
             new_states = env.init_states[sample_result]  # TODO: 为什么每次将采样结果输入的新状态后得到的新动作都是一样的值？？因为新状态变为稀疏矩阵了！！！！！！！！！！
-            index = sample_result  # 传递采样结果索引到下一层
+            index = sample_result  # 传递采样结果索引到下一层  TODO: 原始预测动作皆为相同值，因为原始特征相较于聚合后加入的参数的特征存在明显差异
         return actions_list  # 改造返回最佳动作的多重列表
 
     def train(self):  # 执行训练
@@ -215,6 +209,7 @@ class QAgent:
         q_values_next_target = self.sample_target_net.predict_nograd(next_states)  # 输出为没有梯度的数组，没法进行反传播
         # 根据公式计算目标q值
         max_q_values = q_values_next_target[np.arange(len(best_actions_next)), best_actions_next]  # 选择最好动作对应的q值
+        #  T_q = r + (1 - done) * alpha * max_q
         target_q_values = rewards + np.invert(dones).astype(np.float64) * self.discount_factor * max_q_values  # TD目标  TODO：是否是done发生错误？？
         loss = self.sample_q_net.update(states, actions, target_q_values, self.episode)  # 训练q网络得到损失
         if self.train_t % self.update_target_estimator_every == 0:  # 训练10次一更新

@@ -17,6 +17,8 @@ Project Description：
     # TODO: 合理设定终止条件，使得智能体在探索有效状态空间时可以得到足够的经验，同时防止过早或过晚的终止。
     # TODO: 检查 q 网络是否编写失误
     # TODO: 重大发现：原始状态节点原始特征过稀疏 ，状态转移之后都为连续向量，导致动作选择单一，数据预处理或者状态转移归一化；
+
+    # TODO: 设定的奖励目标为： 使用更少的 采样数量达到更好的准确率效果
 """
 import torch
 import random
@@ -25,9 +27,12 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.init as init
 import torch.nn.functional as F
+from sklearn.preprocessing import MinMaxScaler
+
 from dataset import load_data, Data
 
 random.seed(64)
+np.random.seed(64)
 torch.manual_seed(64)
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -99,7 +104,7 @@ class GraphSage(nn.Module):
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
         self.num_layers = num_layers  # 添加几层图卷积
-        self.adj, self.features, _, _, _, _ = load_data()  # TODO: 这???没有问题吧
+        self.adj, self.features, _, _, _, _, self.core = load_data()
         self.gcn = nn.ModuleList()
         for _ in range(num_layers - 1):
             self.gcn.append(SageGCN(input_dim, input_dim))  # TODO： 可将其改进为仅用 input_dim 作为输入函数构造卷积层
@@ -129,11 +134,25 @@ class GraphSage(nn.Module):
         output = self.fc(hidden[0])
         return output, hidden[0]
 
+    def compute_probabilities(self, sid):  # 根据中心性计算采样概率
+        probabilities = []
+        for neighbor_node in self.adj[sid]:  # 节点的每个邻居的Katz分数
+            probabilities.append(self.core[neighbor_node])
+        total = sum(probabilities)
+        normlized_probabilities = [prob / total for prob in probabilities]  # 归一化
+        return normlized_probabilities
+
     def sampling(self, src_nodes, action):  # 这里 sample_num 内部元素值为0~9，对应采样动作 1~10
         result = []
-        for i, sid in enumerate(src_nodes):  # TODO：在这里融合Katz
+        for i, sid in enumerate(src_nodes):
             sample_num = action[i] + 1
-            res = np.random.choice(self.adj[sid], sample_num, replace=True)  # 执行有放回采样
+            neighbor_nodes = self.adj.get(sid, [])
+            if len(neighbor_nodes) > 0:
+                probability = self.compute_probabilities(sid)
+                res = np.random.choice(self.adj[sid], size=(sample_num,), replace=True, p=probability)  # size：需要采样的数量
+                # res = np.random.choice(neighbor_table[sid], size=(sample_num,))
+            else:
+                res = []
             result.extend(res)
         return np.array(result)  # 返回采样结果的数组
 
@@ -163,10 +182,11 @@ class Sage_env:
         self.processing_data()  # 进行数据处理
         self.batch_size = len(self.idx_train)  # 为训练节点数量作为批次训练数量，同时也为 dqn 每次采样经验的数量
         self.past_performance = [0.0]  # 该两个变量用于计算前面的平均准确率，用于定义奖励
-        self.baseline_experience = 100
+        self.baseline_experience = 5  # 过去五个批次
+        self.last_sample = [0] * len(self.idx_train)  # TODO:储存过去一个时间步该批次节点对应采样数量的均值；初始化为采样的最少节点数量
         # --------------------------------------------------------------------------------------
         self.NUM_BATCH_PER_EPOCH = NUM_BATCH_PER_EPOCH  # 每轮训练执行多少个批次  TODO：没有用到
-        self.buffers = []  # TODO：没有用到
+        self.buffers = [[] * len(self.idx_train)]  # 用于存储每一批次所有时间步对应节点采样数量的均值
         # 定义模型
         self.model = GraphSage(self.features.shape[1], hid_dim, output_dim, num_layers).to(DEVICE)  # 拟设定num_layers=2为图卷积层数
         self.optimizer = optim.Adam(self.model.parameters(), lr, weight_decay=weight_decay)
@@ -174,17 +194,16 @@ class Sage_env:
 
     def processing_data(self):
         print("processing dataset............")
-        self.adj, self.features, self.labels, self.idx_train, self.idx_val, self.idx_test = load_data()
+        self.adj, self.features, self.labels, self.idx_train, self.idx_val, self.idx_test, _ = load_data()
         self.init_states = self.features
         print("The data has been loaded! ")
 
-    def reset(self):
-        scr_index = np.random.choice(self.idx_train, int(len(self.idx_train)*0.1), replace=False)
-        states = self.init_states[scr_index]  # TODO:是否应该采用随机采样，缩小基础空间容量？？
-        # scr_index = self.idx_train
-        # states = self.init_states[scr_index]
+    def reset(self):  # TODO：是否加入随机性打乱初始状态顺序还是对节点特征随机加入扰动？
+        self.reset_parameters()  # TODO: 是否应该重置模型参数，不重置环境验证集准确率更高，但是会为dqn学习到更好的拟合效果么
+        # scr_index = np.random.choice(self.idx_train, int(len(self.idx_train)*0.1), replace=False)
+        scr_index = self.idx_train
+        states = self.init_states[scr_index]  # 可以在状态初始化过程中随机加入高斯扰动用于模拟状态初始化的状态
         self.optimizer.zero_grad()
-        # self.reset_parameters()  # TODO: 是否应该重置模型参数，不重置环境验证集准确率更高，但是会为dqn学习到更好的拟合效果么
         return scr_index, states
 
     def reset_parameters(self):  # 模型参数的重置
@@ -202,19 +221,39 @@ class Sage_env:
         if not dqn_train_tag:  # 仅仅执行 指导 GNN 训练，仅返回 loss 不再进行额外运算
             return loss, accuracy
         # 在训练集上的分类损失达到 0.01 一下则设置为终止状态
-        if loss < 0.01:  # plan3
-            done = True
-        dones = [done] * len(actions[0])
-        # dones = [True if i == 1 else False for i in pred_rights]
+        # if loss < 0.01:  # plan3
+        #     done = True
+        # dones = [done] * len(actions[0])
+        sample_num = actions[0]  # 获取原始节点采样数量
+        dones = [True if i == 1 else False for i in pred_rights]  # TODO: 终止标志也应该合理计入
         next_states = self.state_transfer(actions, scr_index)  # 使用执行动作更新参数得到的网络得到下一阶段状态
-        val_acc = self.eval()  # 仅计算验证集准确率，用于选择合适的agent
-        rewards = [1 if i == 1 else 0 for i in pred_rights]  # 预测正确执行正确执行正确奖励，反之进行惩罚
+        val_acc = self.eval()  # 仅计算验证集准确率，用于选择合适的agent，所以验证集合内结点的选择应该具有代表测试集节点的能力
+        baseline = np.mean(np.array(self.past_performance[-self.baseline_experience:]))
+        self.past_performance.append(val_acc)
+        train_acc_performance = [0.6 if i == 1 else 0 for i in pred_rights]
+
+        # 基础采样准确率为 一次agent训练的所有时间步长内节点多次采样的均值，仅在一此训练之后进行更新
+        sample_num_performance = [0.06 * (x - y - 1) for x, y in zip(self.last_sample, sample_num)]
+        val_acc_performance = val_acc - baseline
+        # 奖励设置优先以 训练集节点节点是否预测成功为首，若预测成功，则计算应逐步减少节点聚合数量？？
+        # TODO：设置多尺度奖励： r =  0.6 * (测试集分类准确率) + 0.2 * (当前批次节点聚合邻居数目相较于上一批次节点数目增量的负数) + 0.2 * (验证集相较于过去十个批次平均提升准确率是否上升)： 结合节点计算效率与准确性
+        rewards = [x + y + val_acc_performance for x, y in zip(train_acc_performance, sample_num_performance)]
+        self.last_sample = sample_num  # 更新当前采样数量，应该一次训练一更新
         r = np.sum(np.array(rewards))  # 计算该轮次总计奖励
         return next_states, rewards, dones, (val_acc, r)  # 返回平均准确率与平均奖励
 
     def state_transfer(self, actions, index):  # 执行聚合后的得到状态转移后的结果
         _, next_states = self.model(actions, index)
-        return next_states.detach().cpu().numpy()
+        next_states = self.Feature_preprocessing(next_states)
+        return next_states
+
+    @staticmethod
+    def Feature_preprocessing(node_feature):  # 对转移特征进行规范化处理：输入为 tensor 输出为 numpy
+        node_feature = node_feature.detach().cpu().numpy()
+        # scaler = MinMaxScaler(feature_range=(-1, 1))  # 节点值缩放  TODO：加入之后效果不理想
+        # node_feature = scaler.fit_transform(node_feature)
+        # node_feature = node_feature / node_feature.sum(1, keepdims=True)  # 归一化
+        return node_feature
 
     def train(self, actions, scr_index):  # 仅执行一次训练；
         self.model.train()
