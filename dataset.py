@@ -108,6 +108,9 @@ def process_data(path="./cora/", dataset="cora"):
     # 数据集随机划分
     idx_train, idx_val, idx_test = random_mask(num_node=features.shape[0], train_ratio=0.05, val_ratio=0.05, test_ratio=0.36)
     Katz_core = Katz_centrality(adj_list, katz_alpha=0.05)
+    # Katz_core = Katz_centrality(adj_list, katz_alpha=0.05).reshape(-1, 1)
+    # scaler = MinMaxScaler(feature_range=(0, 1))  # 平滑处理
+    # Katz_core = scaler.fit_transform(Katz_core).flatten()
     return Data(adj=adj_list, features=features, labels=labels, idx_train=idx_train, idx_val=idx_val, idx_test=idx_test, Katz_core=Katz_core)
 
 

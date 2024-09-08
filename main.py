@@ -7,7 +7,6 @@ File    ：main.py
 Date    ：2024/9/2 下午5:12 
 Project ：new_idea 
 Project Description：
-    TODO: 先不调试 dqn 网络了，先将 katz 中心性添加到采样过程
 """
 # -*- coSage_envding: UTF-8 -*-
 import time
@@ -35,8 +34,8 @@ parser.add_argument('--update_target_estimator_every', type=int, default=5)  # �
 parser.add_argument('--discount_factor', type=float, default=0.9)  # 折扣因子，用于计算未来奖励的现值。
 parser.add_argument('--max_sample_num', type=int, default=10)  # 最多选取十个数量的邻居选取动作
 parser.add_argument('--mlp_layers', type=list, default=[256, 128, 64])  # 定义qnet中MLP的每层神经元数量
-parser.add_argument('--max_episodes', type=int, default=20)  # 总周期数
-parser.add_argument('--max_timesteps', type=int, default=10)  # 每个周期填充 30 批次经验(30*135)
+parser.add_argument('--max_episodes', type=int, default=1)  # 总周期数
+parser.add_argument('--max_timesteps', type=int, default=2)  # 每个周期填充 30 批次经验(30*135)
 
 parser.add_argument('--epochs', type=int, default=50)  # GNN训练轮次
 args = parser.parse_args()
@@ -85,7 +84,7 @@ def main(K=0):  # 这里的 K 应该传入数据集处理函数实现 K 折交�
     print("训练 {} 次 agent，每次装填 {} * {} 条经验；".format(args.max_episodes, args.max_timesteps, args.Sage_batch_size))  # TODO：无用！
     for episode in range(args.max_episodes):  # 训练智能体的轮次
         loss, _, (val_acc, Cumulative_rewards) = agent.learn(env, args.max_timesteps)
-        if val_acc > last_val:
+        if val_acc > last_val:  # TODO: 用验证集获取还是用奖励获取
             best_policy = deepcopy(agent)
             last_val = val_acc
             tag = episode

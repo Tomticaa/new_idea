@@ -172,15 +172,13 @@ class QAgent:
         actions_list = [[] for _ in range(self.Sage_num_layers)]
         new_states = states  # 接收状态
         epsilon = self.epsilons[min(self.total_t, self.epsilon_decay_steps - 1)]  # 设置随机探索率
-
         for actions in actions_list:  # 对于每层的采样列表 该循环执行三次
             action_probability = np.ones(self.max_sample_num, dtype=float) * epsilon / self.max_sample_num  # 0~9 的 np
             best_action = self.eval_step(new_states)  # 返回值为 0~9 的一维数组
             for a in best_action:  # 枚举该批次动作中的每一个动作，改变其选择概率
                 action_probability[a] += (1.0 - epsilon)  # TODO： 动作选取的还是不够随机,没有达到很好效果
             action_probability = action_probability / action_probability.sum()
-            best_actions = np.random.choice(np.arange(len(action_probability)), p=action_probability,
-                                            size=len(new_states))
+            best_actions = np.random.choice(np.arange(len(action_probability)), p=action_probability, size=len(new_states))
             actions.extend(best_actions)  # 批量添加列表元素
             # 第一层结束,获取邻居采样结果用于第二阶段采样前准备
             sample_result = env.model.sampling(index, best_actions)  # 针对索引列表内节点使用预测出来的最佳采样数量策略进行采样
@@ -191,12 +189,13 @@ class QAgent:
     def predict_action_sequences_new(self, index, states, env):
         actions_list = [[] for _ in range(self.Sage_num_layers)]
         new_states = states
-        epsilon = self.epsilons[min(self.total_t, self.epsilon_decay_steps - 1)]  # 设置随机探索率衰减到0
+        # epsilon = self.epsilons[min(self.total_t, self.epsilon_decay_steps - 1)]  # 设置随机探索率衰减到0
         epsilon = 0  # TODO：用于排查问题
         self.total_t += 1  # 衰减
         for actions_sub_list in actions_list:
             actions = self.eval_step(new_states)  # 返回一个批次的预测动作
             best_actions = [act if np.random.rand() > epsilon else np.random.randint(0, 10) for act in actions]
+            best_actions = [9 if np.random.rand() > epsilon else np.random.randint(0, 10) for act in actions]  # TODO： 用于测试，将动作全部设置成最大值或者最小值，看准确率是否发生变化
             actions_sub_list.extend(best_actions)
             sample_result = env.model.sampling(index, best_actions)  # 针对索引列表内节点使用预测出来的最佳采样数量策略进行采样
             new_states = env.init_states[sample_result]  # TODO: 为什么每次将采样结果输入的新状态后得到的新动作都是一样的值？？因为新状态变为稀疏矩阵了！！！！！！！！！！

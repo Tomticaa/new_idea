@@ -150,7 +150,7 @@ class GraphSage(nn.Module):
             if len(neighbor_nodes) > 0:
                 probability = self.compute_probabilities(sid)
                 res = np.random.choice(self.adj[sid], size=(sample_num,), replace=True, p=probability)  # size：需要采样的数量
-                # res = np.random.choice(neighbor_table[sid], size=(sample_num,))
+                # res = np.random.choice(self.adj[sid], size=(sample_num,))  # 为什么随机采样效果更好
             else:
                 res = []
             result.extend(res)
