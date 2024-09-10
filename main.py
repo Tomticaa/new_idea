@@ -35,7 +35,7 @@ parser.add_argument('--discount_factor', type=float, default=0.9)  # 折扣因�
 parser.add_argument('--max_sample_num', type=int, default=10)  # 最多选取十个数量的邻居选取动作
 parser.add_argument('--mlp_layers', type=list, default=[256, 128, 64])  # 定义qnet中MLP的每层神经元数量
 parser.add_argument('--max_episodes', type=int, default=5)  # 总周期数
-parser.add_argument('--max_timesteps', type=int, default=8)  # 每个周期填充 30 批次经验(30*135)
+parser.add_argument('--max_timesteps', type=int, default=10)  # 每个周期填充 30 批次经验(30*135)
 
 parser.add_argument('--epochs', type=int, default=50)  # GNN训练轮次
 args = parser.parse_args()
@@ -111,7 +111,7 @@ def main(K=0):  # 这里的 K 应该传入数据集处理函数实现 K 折交�
     start = time.time()
     for i_episode in range(args.epochs):  # 使用训练好的最佳策略指导GNN计算
         t = time.time()
-        loss, train_accuracy = new_env.step(actions, index, dqn_train_tag=False)  # 仅仅执行一次训练，不计算其他参数
+        loss, train_accuracy = new_env.GNN_train(actions, index)  # 仅仅执行一次训练，不计算其他参数
         _, test_acc = new_env.test()
         train_accs.append(train_accuracy)
         test_accs.append(test_acc)

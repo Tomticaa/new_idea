@@ -178,7 +178,8 @@ class QAgent:
         for actions_sub_list in actions_list:
             actions = self.eval_step(new_states)  # 返回一个批次的预测动作
             best_actions = [act if np.random.rand() > epsilon else np.random.randint(0, 10) for act in actions]
-            # best_actions = [5 if np.random.rand() > epsilon else np.random.randint(0, 10) for act in actions]  # TODO： 用于测试，将动作全部设置成最大值或者最小值，看准确率是否发生变化
+            # TODO: 方便调试
+            best_actions = [5 if np.random.rand() > epsilon else np.random.randint(0, 10) for act in actions]  # TODO： 用于测试，将动作全部设置成最大值或者最小值，看准确率是否发生变化
             actions_sub_list.extend(best_actions)
             sample_result = env.model.sampling(index, best_actions)  # 针对索引列表内节点使用预测出来的最佳采样数量策略进行采样
             new_states = env.init_states[sample_result]  # TODO: 为什么每次将采样结果输入的新状态后得到的新动作都是一样的值？？因为新状态变为稀疏矩阵了！！！！！！！！！！

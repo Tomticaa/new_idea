@@ -55,9 +55,9 @@ def Feature_preprocessing(node_feature, noise_level=0.01):  # 原始特征进行
     node_feature = node_feature + noise_level * torch.randn_like(node_feature)  # 添加高斯扰动
     node_feature = node_feature.numpy()
 
-    # scaler = MinMaxScaler(feature_range=(-1, 1))  # 节点值缩放  TODO: 导致分类准确率急剧降低
-    # node_feature = scaler.fit_transform(node_feature)
-    node_feature = node_feature / node_feature.sum(1, keepdims=True)  # 归一化
+    scaler = MinMaxScaler(feature_range=(0, 1))  # 节点值缩放  TODO: 导致分类准确率急剧降低
+    node_feature = scaler.fit_transform(node_feature)
+    # node_feature = node_feature / node_feature.sum(1, keepdims=True)  # 归一化
     return node_feature
 
 
