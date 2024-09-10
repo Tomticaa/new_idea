@@ -26,7 +26,7 @@ parser.add_argument('--env_out_dim', type=int, default=7)
 parser.add_argument('--Sage_num_layers', type=int, default=2)  # 卷积层叠加层数(也为邻居采样的最大层数)
 parser.add_argument('--Sage_batch_size', type=int, default=135)  # 每批次训练节点数以及经验池采样数量
 parser.add_argument('--NUM_BATCH_PER_EPOCH', type=int, default=20)  # 每轮训练执行多少个batch
-parser.add_argument('--lr', type=float, default=0.01)
+parser.add_argument('--lr', type=float, default=0.005)
 parser.add_argument('--weight_decay', type=float, default=5e-4)
 # agent definition
 parser.add_argument('--replay_memory_size', type=int, default=5000)  # 经验回放内存的总大小
@@ -34,8 +34,8 @@ parser.add_argument('--update_target_estimator_every', type=int, default=5)  # �
 parser.add_argument('--discount_factor', type=float, default=0.9)  # 折扣因子，用于计算未来奖励的现值。
 parser.add_argument('--max_sample_num', type=int, default=10)  # 最多选取十个数量的邻居选取动作
 parser.add_argument('--mlp_layers', type=list, default=[256, 128, 64])  # 定义qnet中MLP的每层神经元数量
-parser.add_argument('--max_episodes', type=int, default=1)  # 总周期数
-parser.add_argument('--max_timesteps', type=int, default=2)  # 每个周期填充 30 批次经验(30*135)
+parser.add_argument('--max_episodes', type=int, default=5)  # 总周期数
+parser.add_argument('--max_timesteps', type=int, default=8)  # 每个周期填充 30 批次经验(30*135)
 
 parser.add_argument('--epochs', type=int, default=50)  # GNN训练轮次
 args = parser.parse_args()
@@ -107,7 +107,7 @@ def main(K=0):  # 这里的 K 应该传入数据集处理函数实现 K 折交�
     test_accs = []
     epochs = np.arange(args.epochs)
     print("The episode: {} strategy guides GNN training".format(tag))
-    actions = new_env.policy.predict_action_sequences_new(index, states, new_env)
+    actions = new_env.policy.predict_action_sequences(index, states, new_env)
     start = time.time()
     for i_episode in range(args.epochs):  # 使用训练好的最佳策略指导GNN计算
         t = time.time()

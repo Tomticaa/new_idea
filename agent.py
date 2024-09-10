@@ -148,13 +148,14 @@ class QAgent:
         # 执行一次智能体训练
         Cumulative_rewards = 0
         for _ in range(total_time_steps):  # 训练时间步  TODO:添加进度条并显示奖励
-            actions = self.predict_action_sequences_new(scr_index, states, env)  # 根据当前状态在q网络中形成最佳动作序列(已添加随机性)
-            next_states, rewards, dones, (val_acc, r) = env.step(actions, scr_index)  # 执行动作为多重列表
+            actions = self.predict_action_sequences(scr_index, states, env)  # 根据当前状态在q网络中形成最佳动作序列(已添加随机性)
+            (next_states, trans_index), rewards, dones, (val_acc, r) = env.step(actions, scr_index)  # 执行动作为多重列表
             transition = zip(states, actions[0], rewards, next_states, dones)  # 仅仅将第一层针对源节点采取的行动加入经验进行训练
             for ts in transition:
                 self.feed(ts)
             states = next_states  # 进行时间步 次的状态转移
-            print("reward :{}".format(r))
+            scr_index = trans_index
+            # print("reward :{}".format(r))
             Cumulative_rewards += r
         loss = self.train()
         return loss, rewards, (val_acc, Cumulative_rewards)  # Cumulative_rewards:执行一个批次动作得到的全部奖励
@@ -168,34 +169,16 @@ class QAgent:
         best_actions = np.argmax(q_values, axis=1)
         return best_actions  # 返回值为 np 数组 ，代表该批次中该层节点采样的邻居个数
 
-    def predict_action_sequences(self, index, states, env):  # 根据当前批量状态并基于ε-贪婪策略的动作选择机制，结合当前环境返回该状态下的最佳动作序列
-        actions_list = [[] for _ in range(self.Sage_num_layers)]
-        new_states = states  # 接收状态
-        epsilon = self.epsilons[min(self.total_t, self.epsilon_decay_steps - 1)]  # 设置随机探索率
-        for actions in actions_list:  # 对于每层的采样列表 该循环执行三次
-            action_probability = np.ones(self.max_sample_num, dtype=float) * epsilon / self.max_sample_num  # 0~9 的 np
-            best_action = self.eval_step(new_states)  # 返回值为 0~9 的一维数组
-            for a in best_action:  # 枚举该批次动作中的每一个动作，改变其选择概率
-                action_probability[a] += (1.0 - epsilon)  # TODO： 动作选取的还是不够随机,没有达到很好效果
-            action_probability = action_probability / action_probability.sum()
-            best_actions = np.random.choice(np.arange(len(action_probability)), p=action_probability, size=len(new_states))
-            actions.extend(best_actions)  # 批量添加列表元素
-            # 第一层结束,获取邻居采样结果用于第二阶段采样前准备
-            sample_result = env.model.sampling(index, best_actions)  # 针对索引列表内节点使用预测出来的最佳采样数量策略进行采样
-            new_states = env.init_states[sample_result]
-            index = sample_result  # 传递采样结果索引到下一层
-        return actions_list  # 改造返回最佳动作的多重列表
-
-    def predict_action_sequences_new(self, index, states, env):
+    def predict_action_sequences(self, index, states, env):
         actions_list = [[] for _ in range(self.Sage_num_layers)]
         new_states = states
-        # epsilon = self.epsilons[min(self.total_t, self.epsilon_decay_steps - 1)]  # 设置随机探索率衰减到0
-        epsilon = 0  # TODO：用于排查问题
+        epsilon = self.epsilons[min(self.total_t, self.epsilon_decay_steps - 1)]  # 设置随机探索率衰减到0
+        # epsilon = 0  # TODO：用于排查问题
         self.total_t += 1  # 衰减
         for actions_sub_list in actions_list:
             actions = self.eval_step(new_states)  # 返回一个批次的预测动作
             best_actions = [act if np.random.rand() > epsilon else np.random.randint(0, 10) for act in actions]
-            best_actions = [9 if np.random.rand() > epsilon else np.random.randint(0, 10) for act in actions]  # TODO： 用于测试，将动作全部设置成最大值或者最小值，看准确率是否发生变化
+            # best_actions = [5 if np.random.rand() > epsilon else np.random.randint(0, 10) for act in actions]  # TODO： 用于测试，将动作全部设置成最大值或者最小值，看准确率是否发生变化
             actions_sub_list.extend(best_actions)
             sample_result = env.model.sampling(index, best_actions)  # 针对索引列表内节点使用预测出来的最佳采样数量策略进行采样
             new_states = env.init_states[sample_result]  # TODO: 为什么每次将采样结果输入的新状态后得到的新动作都是一样的值？？因为新状态变为稀疏矩阵了！！！！！！！！！！

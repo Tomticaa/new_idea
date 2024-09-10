@@ -19,6 +19,8 @@ Project Description：
     # TODO: 重大发现：原始状态节点原始特征过稀疏 ，状态转移之后都为连续向量，导致动作选择单一，数据预处理或者状态转移归一化；
 
     # TODO: 设定的奖励目标为： 使用更少的 采样数量达到更好的准确率效果
+
+    # TODO： 更改状态转移测： 将经过聚合后的状态与训练集中其他节点状态进行特征比较，选择差异最小节点进行状态转移
 """
 import torch
 import random
@@ -27,7 +29,9 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.init as init
 import torch.nn.functional as F
+from scipy.spatial import cKDTree
 from sklearn.preprocessing import MinMaxScaler
+
 
 from dataset import load_data, Data
 
@@ -180,6 +184,7 @@ class Sage_env:
         self.weight_decay = weight_decay
         self.policy = policy
         self.processing_data()  # 进行数据处理
+        self.transfer_tree = cKDTree(self.features[self.idx_train])  # TODO: 用于计算转移状态最相似节点
         self.batch_size = len(self.idx_train)  # 为训练节点数量作为批次训练数量，同时也为 dqn 每次采样经验的数量
         self.past_performance = [0.0]  # 该两个变量用于计算前面的平均准确率，用于定义奖励
         self.baseline_experience = 5  # 过去五个批次
@@ -202,7 +207,7 @@ class Sage_env:
         self.reset_parameters()  # TODO: 是否应该重置模型参数，不重置环境验证集准确率更高，但是会为dqn学习到更好的拟合效果么
         # scr_index = np.random.choice(self.idx_train, int(len(self.idx_train)*0.1), replace=False)
         scr_index = self.idx_train
-        states = self.init_states[scr_index]  # 可以在状态初始化过程中随机加入高斯扰动用于模拟状态初始化的状态
+        states = self.init_states[scr_index]  # TODO：考虑在状态初始化过程中随机加入高斯扰动用于模拟状态初始化的轻微波动
         self.optimizer.zero_grad()
         return scr_index, states
 
@@ -218,6 +223,7 @@ class Sage_env:
     def step(self, actions, scr_index, dqn_train_tag=True):  # action：0~9 -> 采样数量 1~10
         done = False
         loss, accuracy, pred_rights = self.train(actions, scr_index)
+        print(loss)
         if not dqn_train_tag:  # 仅仅执行 指导 GNN 训练，仅返回 loss 不再进行额外运算
             return loss, accuracy
         # 在训练集上的分类损失达到 0.01 一下则设置为终止状态
@@ -226,7 +232,7 @@ class Sage_env:
         # dones = [done] * len(actions[0])
         sample_num = actions[0]  # 获取原始节点采样数量
         dones = [True if i == 1 else False for i in pred_rights]  # TODO: 终止标志也应该合理计入
-        next_states = self.state_transfer(actions, scr_index)  # 使用执行动作更新参数得到的网络得到下一阶段状态
+        next_states, trans_index = self.state_transfer(actions, scr_index)  # 使用执行动作更新参数得到的网络得到下一阶段状态
         val_acc = self.eval()  # 仅计算验证集准确率，用于选择合适的agent，所以验证集合内结点的选择应该具有代表测试集节点的能力
         baseline = np.mean(np.array(self.past_performance[-self.baseline_experience:]))
         self.past_performance.append(val_acc)
@@ -240,12 +246,21 @@ class Sage_env:
         rewards = [x + y + val_acc_performance for x, y in zip(train_acc_performance, sample_num_performance)]
         self.last_sample = sample_num  # 更新当前采样数量，应该一次训练一更新
         r = np.sum(np.array(rewards))  # 计算该轮次总计奖励
-        return next_states, rewards, dones, (val_acc, r)  # 返回平均准确率与平均奖励
+        return (next_states, trans_index), rewards, dones, (val_acc, r)  # 返回平均准确率与平均奖励
 
-    def state_transfer(self, actions, index):  # 执行聚合后的得到状态转移后的结果
-        _, next_states = self.model(actions, index)
+    def state_transfer(self, actions, src_index):  # 执行聚合后的得到状态转移后的结果
+        """
+        1， 最理想的方案就是将聚合之后的结合参数的新的节点特征作为经过简单处理作为新的状态，执行状态转移，
+        这新的1433维向量可以模拟整个数据集中的节点特征情况；这种方法导致
+        2， 在测试集合内找到通过 KNN 得到相近的节点特征及其索引作为下一阶段输入，这种方法导致训练到最后可选节点总趋于一致
+        """
+        _, next_states = self.model(actions, src_index)
         next_states = self.Feature_preprocessing(next_states)
-        return next_states
+        # TODO: 状态转移过程归纳到训练集之内，使用 最近邻机制 进行估计状态转移： 转移几轮过后，最近的几个节点总是趋于一致
+        distance, index = self.transfer_tree.query(next_states, k=1)  # 查询距离最近节点并返回索引
+        trans_index = self.idx_val[index]
+        next_states = self.init_states[trans_index]
+        return next_states, trans_index
 
     @staticmethod
     def Feature_preprocessing(node_feature):  # 对转移特征进行规范化处理：输入为 tensor 输出为 numpy
@@ -273,7 +288,7 @@ class Sage_env:
         with torch.no_grad():
             val_index = self.idx_val
             val_states = self.init_states[val_index]
-            val_actions = self.policy.predict_action_sequences_new(val_index, val_states, self)
+            val_actions = self.policy.predict_action_sequences(val_index, val_states, self)
             logits, _ = self.model(val_actions, val_index)
             preds = logits.argmax(dim=1)
             labels = torch.LongTensor(self.labels[val_index]).to(DEVICE)
@@ -285,7 +300,7 @@ class Sage_env:
         with torch.no_grad():  # 完全禁用梯度计算，提高模型推理速度
             test_index = self.idx_test
             test_states = self.init_states[test_index]
-            test_actions = self.policy.predict_action_sequences_new(test_index, test_states, self)  # 将自己作为环境输入进函数
+            test_actions = self.policy.predict_action_sequences(test_index, test_states, self)  # 将自己作为环境输入进函数
             logits, _ = self.model(test_actions, test_index)
             preds = logits.argmax(dim=1)
             labels = torch.LongTensor(self.labels[test_index]).to(DEVICE)
