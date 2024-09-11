@@ -172,12 +172,12 @@ class QAgent:
     def predict_action_sequences(self, index, states, env):
         actions_list = [[] for _ in range(self.Sage_num_layers)]
         new_states = states
-        epsilon = self.epsilons[min(self.total_t, self.epsilon_decay_steps - 1)]  # 设置随机探索率衰减到0
-        # epsilon = 0  # TODO：用于排查问题
+        # epsilon = self.epsilons[min(self.total_t, self.epsilon_decay_steps - 1)]  # 设置随机探索率衰减到0
+        epsilon = 0  # TODO：用于排查问题
         self.total_t += 1  # 衰减
         for actions_sub_list in actions_list:
             actions = self.eval_step(new_states)  # 返回一个批次的预测动作
-            best_actions = [act if np.random.rand() > epsilon else np.random.randint(0, 10) for act in actions]
+            # best_actions = [act if np.random.rand() > epsilon else np.random.randint(0, 10) for act in actions]
             # TODO: 方便调试
             best_actions = [5 if np.random.rand() > epsilon else np.random.randint(0, 10) for act in actions]  # TODO： 用于测试，将动作全部设置成最大值或者最小值，看准确率是否发生变化
             actions_sub_list.extend(best_actions)

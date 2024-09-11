@@ -22,6 +22,8 @@ Project Description：
 
     # TODO： 更改状态转移测： 将经过聚合后的状态与训练集中其他节点状态进行特征比较，选择差异最小节点进行状态转移
 """
+from collections import namedtuple
+
 import torch
 import random
 import numpy as np
@@ -38,27 +40,39 @@ random.seed(64)
 np.random.seed(64)
 torch.manual_seed(64)
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+Trans_feature = namedtuple('Trans_feature', ['src_index', 'next_state'])  # 定义转移状态
 
 
-class NeighborAggregator(nn.Module):  # 计算wh
-    def __init__(self, input_dim, output_dim, use_bias=False):
-        super(NeighborAggregator, self).__init__()
-        self.input_dim = input_dim
-        self.output_dim = output_dim
-        self.use_bias = use_bias
-        self.weight = nn.Parameter(torch.Tensor(input_dim, output_dim))
-        if self.use_bias:
-            self.bias = nn.Parameter(torch.Tensor(self.output_dim))
-        self.reset_parameters()
+class Trans_Buffer:  # 定义缓冲池扩充训练集
+    def __init__(self, buffer_size=1350):  # TODO：一共得到多少状态
+        self.buffer_size = buffer_size
+        self.buffer = []
 
-    def reset_parameters(self):
-        init.kaiming_uniform_(self.weight)
-        if self.use_bias:
-            init.zeros_(self.bias)
+    def save(self, src_index, next_state):  # 添加经验：逐个保存
+        if len(self.buffer) == self.buffer_size:
+            self.buffer.pop(0)  # 弹出队头经验维持缓冲池大小
+        transition = Trans_feature(src_index, next_state)
+        self.buffer.append(transition)
 
-    def forward(self, action, neighbor_feature):
-        #  输入action=[1,1,2,3,0,8,4,5,9]
-        # 对应采样数量为[2,2,3,4,1,9,5,6,10]
+    def sample(self, batch_size):  # 采样
+        if len(self.buffer) < batch_size:
+            samples = random.sample(self.buffer, len(self.buffer))
+        else:
+            samples = random.sample(self.buffer, batch_size)
+        return map(np.array, zip(*samples))  # 返回numpy形式的批量经验
+
+    def size(self):  # 返回记忆缓存长度
+        return len(self.buffer)
+
+
+class SageGCN(nn.Module):  # 定义图卷积层
+    def __init__(self, activation=torch.relu):  # TODO: 可尝试使用多种激活函数
+        super(SageGCN, self).__init__()
+        self.activation = activation  # 中间层添加激活函数
+
+    @staticmethod
+    def NeighborAggregator(action, neighbor_feature):
+        # TODO: 仅返回邻居特征的均值，也可以加入注意力机制为不同邻居增加权重系数
         t = 0
         aggr_neighbor = torch.zeros(len(action), neighbor_feature.size(1)).to(DEVICE)  # 初始化新张量，用于存储聚合后的结果
         for i, num in enumerate(action):  # 枚举每个采样数
@@ -66,40 +80,15 @@ class NeighborAggregator(nn.Module):  # 计算wh
             selected_tensors = neighbor_feature[t:t + sample_num]
             aggr_neighbor[i] = selected_tensors.mean(dim=0)  # 可以尝试多种聚合方法
             t += sample_num
-
-        neighbor_hidden = torch.matmul(aggr_neighbor, self.weight)  # wh
-        if self.use_bias:
-            neighbor_hidden += self.bias
-        return neighbor_hidden
-
-
-# TODO： 如果我在节点的卷积过程中不引入任何参数，仅使用普通的聚合方法，把参数更新过程全部归纳在线性层呢？？ 或者使用sigmoid激活函数将特征压缩在（0~1）之间
-class SageGCN(nn.Module):  # 定义图卷积层
-    def __init__(self, input_dim, hidden_dim, activation=torch.sigmoid):  # TODO: 可尝试使用多种激活函数
-        super(SageGCN, self).__init__()
-        self.input_dim = input_dim
-        self.hidden_dim = hidden_dim
-        self.activation = activation  # 中间层添加激活函数
-        self.aggregator = NeighborAggregator(input_dim, hidden_dim)  # 初始化邻居聚合器
-        self.b = nn.Parameter(torch.Tensor(input_dim, hidden_dim))  # 初始化偏差权重
-        self.reset_parameters()
-
-    def reset_parameters(self):
-        init.kaiming_uniform_(self.b)
+        return aggr_neighbor
 
     def forward(self, action, src_node_features, neighbor_node_features):  # action = actions[hop] 为 0~9
-        neighbor_hidden = self.aggregator(action, neighbor_node_features)  # 聚合邻居特征
-        self_hidden = torch.matmul(src_node_features, self.b)
-        hidden = self_hidden + neighbor_hidden  # 使用"sum"进行聚合邻居信息
+        neighbor_hidden = self.NeighborAggregator(action, neighbor_node_features)  # 聚合邻居特征
+        hidden = (src_node_features + neighbor_hidden) / 2  # TODO: 是否应该取平均
         if self.activation:  # 在中间层表示允许激活
             return self.activation(hidden)
         else:
             return hidden
-
-    def extra_repr(self):  # 打印网络层次结构
-        output_dim = self.hidden_dim if self.aggr_hidden_method == "sum" else self.hidden_dim * 2
-        return 'in_features={}, out_features={}, aggr_hidden_method={}'.format(
-            self.input_dim, output_dim, self.aggr_hidden_method)
 
 
 class GraphSage(nn.Module):
@@ -111,7 +100,7 @@ class GraphSage(nn.Module):
         self.adj, self.features, _, _, _, _, self.core = load_data()
         self.gcn = nn.ModuleList()
         for _ in range(num_layers):
-            self.gcn.append(SageGCN(input_dim, input_dim))  # TODO： 可将其改进为仅用 input_dim 作为输入函数构造卷积层不引入其他可训练参数
+            self.gcn.append(SageGCN())  # TODO： 舍弃 sigmoid 接入 relu
         self.fc = nn.Sequential(nn.Linear(input_dim, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, output_dim))  # 叠加多层线性层并使用relu函数进行连接
         self.initialize_weights()  # 参数初始化
 
@@ -153,8 +142,8 @@ class GraphSage(nn.Module):
             neighbor_nodes = self.adj.get(sid, [])
             if len(neighbor_nodes) > 0:
                 probability = self.compute_probabilities(sid)
-                res = np.random.choice(self.adj[sid], size=(sample_num,), replace=True, p=probability)  # size：需要采样的数量
-                # res = np.random.choice(self.adj[sid], size=(sample_num,))  # 为什么随机采样效果更好
+                # res = np.random.choice(self.adj[sid], size=(sample_num,), replace=True, p=probability)  # size：需要采样的数量
+                res = np.random.choice(self.adj[sid], size=sample_num)  # TODO：使用随机采样进行调试
             else:
                 res = []
             result.extend(res)
@@ -193,6 +182,8 @@ class Sage_env:
         # --------------------------------------------------------------------------------------
         self.NUM_BATCH_PER_EPOCH = NUM_BATCH_PER_EPOCH  # 每轮训练执行多少个批次  TODO：没有用到
         self.buffers = [[] * len(self.idx_train)]  # 用于存储每一批次所有时间步对应节点采样数量的均值
+
+        self.Buffer = Trans_Buffer()  # 将缓冲池大小传进来
         # 定义模型
         self.model = GraphSage(self.features.shape[1], hid_dim, output_dim, num_layers).to(DEVICE)  # 拟设定num_layers=2为图卷积层数
         self.optimizer = optim.Adam(self.model.parameters(), lr, weight_decay=weight_decay)
@@ -214,23 +205,15 @@ class Sage_env:
         return scr_index, states
 
     def reset_parameters(self):  # 模型参数的重置
-        self.optimizer.zero_grad()
-        for layer in self.model.modules():
-            if isinstance(layer, nn.ModuleList):  # 清除卷积层参数
-                for sublayer in layer:
-                    if isinstance(sublayer, SageGCN):
-                        sublayer.reset_parameters()
-        self.model.initialize_weights()  # 清除线性层参数
+        self.model.initialize_weights()  # 仅仅清除线性层参数
 
     def step(self, actions, scr_index):  # action：0~9 -> 采样数量 1~10
         done = False
-        # 应该将该特征在此环境下多次训练或者将所有特征打乱，随机采样训练
-        # TODO: 在该位置定义缓存：不满不训练，满了随机采样打乱原始特征以及转化特征进行统一训练：（应将特征及其对应索引进行打包）
         print('----------------------------------------------------------------')
         self.reset_parameters()
-        for _ in range(50):
+        for _ in range(20):
             loss, accuracy, pred_rights = self.train(actions, scr_index)
-            print("loss: ", loss, 'accuracy: ', accuracy.item())  # 每个状态训练 10 次
+            print("loss: ", loss, 'accuracy: ', accuracy.item())
         # 在训练集上的分类损失达到 0.01 一下则设置为终止状态
         # if loss < 0.01:  # plan3
         #     done = True
@@ -273,16 +256,21 @@ class Sage_env:
         _, next_states = self.model(actions, src_index, self.trans_features)
         next_states = self.Feature_preprocessing(next_states)  # 特征规范化处理模块
         self.trans_features[src_index] = next_states
+        # TODO: 将转移状态填充，扩充训练集，在指导模型训练的过程中随机采样训练，增加模型泛化能力
+        self.buffers.add(src_index, next_states)
         return next_states, src_index
 
-    def GNN_train(self, actions, scr_index):
+    def GNN_train(self, actions, scr_index):  # 在训练过程中使用随机采样，将过程的转移状态扩充到整个训练集和内
+        scr_index, new_feature = self.Buffer.sample(135)  # 随机采样
+        # TODO: 产生问题，怎么接入？？
         loss, accuracy, _ = self.train(actions, scr_index)
         return loss, accuracy
 
     @staticmethod
     def Feature_preprocessing(node_feature):  # 对转移特征进行规范化处理：输入为 tensor 输出为 numpy
+        # TODO： 是否计入节点特征的随机扰动，是否添加归一化函数
         node_feature = node_feature.detach().cpu().numpy()
-        scaler = MinMaxScaler(feature_range=(0, 1))  # 节点值缩放  TODO：加入之后效果不理想
+        scaler = MinMaxScaler(feature_range=(0, 1))  # 节点值缩放  T
         node_feature = scaler.fit_transform(node_feature)
         return node_feature
 
