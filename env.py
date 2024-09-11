@@ -43,28 +43,6 @@ DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 Trans_feature = namedtuple('Trans_feature', ['src_index', 'next_state'])  # 定义转移状态
 
 
-class Trans_Buffer:  # 定义缓冲池扩充训练集
-    def __init__(self, buffer_size=1350):  # TODO：一共得到多少状态
-        self.buffer_size = buffer_size
-        self.buffer = []
-
-    def save(self, src_index, next_state):  # 添加经验：逐个保存
-        if len(self.buffer) == self.buffer_size:
-            self.buffer.pop(0)  # 弹出队头经验维持缓冲池大小
-        transition = Trans_feature(src_index, next_state)
-        self.buffer.append(transition)
-
-    def sample(self, batch_size):  # 采样
-        if len(self.buffer) < batch_size:
-            samples = random.sample(self.buffer, len(self.buffer))
-        else:
-            samples = random.sample(self.buffer, batch_size)
-        return map(np.array, zip(*samples))  # 返回numpy形式的批量经验
-
-    def size(self):  # 返回记忆缓存长度
-        return len(self.buffer)
-
-
 class SageGCN(nn.Module):  # 定义图卷积层
     def __init__(self, activation=torch.relu):  # TODO: 可尝试使用多种激活函数
         super(SageGCN, self).__init__()
@@ -101,7 +79,8 @@ class GraphSage(nn.Module):
         self.gcn = nn.ModuleList()
         for _ in range(num_layers):
             self.gcn.append(SageGCN())  # TODO： 舍弃 sigmoid 接入 relu
-        self.fc = nn.Sequential(nn.Linear(input_dim, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, output_dim))  # 叠加多层线性层并使用relu函数进行连接
+        self.fc = nn.Sequential(nn.Linear(input_dim, hidden_dim), nn.ReLU(),
+                                nn.Linear(hidden_dim, output_dim))  # 叠加多层线性层并使用relu函数进行连接
         self.initialize_weights()  # 参数初始化
 
     def initialize_weights(self):
@@ -113,15 +92,13 @@ class GraphSage(nn.Module):
 
     def forward(self, actions, src_index, trans_features):  # 0~9  TODO：模型计算太慢
         self.features = trans_features  # 将转移后的特征进行赋值
-        # sample_nums = actions 为多重列表，每列表存储当前层的采样节点对应的采样数量，src_index 为单层列表，代表原始采样节点索引
-        # self.num_layers = len(sample_nums)  # 层数也可自定义
         hidden = self.multi_hop_sampling(actions, src_index)  # 直接返回的tensor(已放在cuda上)
         for l in range(self.num_layers):  # 循环遍历每层，使用对象层对应的的sage卷积处理节点特征
             next_hidden = []  # 列表，用于收集当前层处理后的节点特征。
             gcn = self.gcn[l]
-            for hop in range(self.num_layers - l):  # 剩余每一跳，比如说在第二层只会处理剩下的一遍
-                src_node_features = hidden[hop]  # 当前跳的源节点特征。hidden[hop]为list：存储当前层邻居所有的特征(16, 1433)
-                h = gcn(actions[hop], src_node_features, hidden[hop + 1])  # 将该层的每个节点特征以及动态采样数与下一层邻居特征作为参数输入
+            for hop in range(self.num_layers - l):
+                src_node_features = hidden[hop]
+                h = gcn(actions[hop], src_node_features, hidden[hop + 1])
                 next_hidden.append(h)  # 在列表末尾添加
             hidden = next_hidden  # 更新列表，准备进行下一图层处理
         output = self.fc(hidden[0])
@@ -157,14 +134,10 @@ class GraphSage(nn.Module):
         sampling_result_x = [torch.from_numpy(self.features[idx]).float().to(DEVICE) for idx in sampling_result]
         return sampling_result_x  # 提取采样结果的对应特征并返回特征列表
 
-    def extra_repr(self):  # 打印网络结构
-        return 'in_features={}, num_neighbors_list={}'.format(
-            self.input_dim, self.num_neighbors_list
-        )
-
 
 class Sage_env:
-    def __init__(self, hid_dim, output_dim, num_layers, max_sample_num, lr, weight_decay, NUM_BATCH_PER_EPOCH, policy=""):
+    def __init__(self, hid_dim, output_dim, num_layers, max_sample_num, lr, weight_decay, NUM_BATCH_PER_EPOCH,
+                 policy=""):
         self.hid_dim = hid_dim
         self.output_dim = output_dim
         self.num_layers = num_layers
@@ -174,7 +147,6 @@ class Sage_env:
         self.policy = policy
         self.processing_data()  # 进行数据处理
         self.trans_features = self.features  # 转移特征初始化为原始特征
-        self.transfer_tree = cKDTree(self.features[self.idx_train])  # TODO: 用于计算转移状态最相似节点
         self.batch_size = len(self.idx_train)  # 为训练节点数量作为批次训练数量，同时也为 dqn 每次采样经验的数量
         self.past_performance = [0.0]  # 该两个变量用于计算前面的平均准确率，用于定义奖励
         self.baseline_experience = 5  # 过去五个批次
@@ -183,9 +155,9 @@ class Sage_env:
         self.NUM_BATCH_PER_EPOCH = NUM_BATCH_PER_EPOCH  # 每轮训练执行多少个批次  TODO：没有用到
         self.buffers = [[] * len(self.idx_train)]  # 用于存储每一批次所有时间步对应节点采样数量的均值
 
-        self.Buffer = Trans_Buffer()  # 将缓冲池大小传进来
         # 定义模型
-        self.model = GraphSage(self.features.shape[1], hid_dim, output_dim, num_layers).to(DEVICE)  # 拟设定num_layers=2为图卷积层数
+        self.model = GraphSage(self.features.shape[1], hid_dim, output_dim, num_layers).to(
+            DEVICE)  # 拟设定num_layers=2为图卷积层数
         self.optimizer = optim.Adam(self.model.parameters(), lr, weight_decay=weight_decay)
         self.criterion = nn.CrossEntropyLoss()
 
@@ -236,33 +208,13 @@ class Sage_env:
         r = np.sum(np.array(rewards))  # 计算该轮次总计奖励
         return (next_states, trans_index), rewards, dones, (val_acc, r)  # 返回平均准确率与平均奖励
 
-    # def state_transfer_new(self, actions, src_index):  # 执行聚合后的得到状态转移后的结果
-    #     """
-    #     1， 最理想的方案就是将聚合之后的结合参数的新的节点特征作为经过简单处理作为新的状态，执行状态转移，
-    #     这新的1433维向量可以模拟整个数据集中的节点特征情况；这种方法导致
-    #     2， 在测试集合内找到通过 KNN 得到相近的节点特征及其索引作为下一阶段输入，这种方法导致训练到最后可选节点总趋于一致
-    #     """
-    #     _, next_states = self.model(actions, src_index, self.trans_features)
-    #     next_states = self.Feature_preprocessing(next_states)
-    #     # TODO: 状态转移过程归纳到训练集之内，使用 最近邻机制 进行估计状态转移： 转移几轮过后，最近的几个节点总是趋于一致
-    #     distance, index = self.transfer_tree.query(next_states, k=1)  # 查询距离最近节点并返回索引
-    #     trans_index = self.idx_val[index]
-    #     next_states = self.init_states[trans_index]
-    #     return next_states, trans_index
-
     def state_transfer(self, actions, src_index):
-        # 改进特征转移过程：仅使用方案 1 处理经过聚合信息后的新节点表示，对其进行规范化。
-        # 将其输入模型达到预测未知节点的目的，同时增加每轮训练次数，为模型增强泛化能力
         _, next_states = self.model(actions, src_index, self.trans_features)
         next_states = self.Feature_preprocessing(next_states)  # 特征规范化处理模块
         self.trans_features[src_index] = next_states
-        # TODO: 将转移状态填充，扩充训练集，在指导模型训练的过程中随机采样训练，增加模型泛化能力
-        self.buffers.add(src_index, next_states)
         return next_states, src_index
 
     def GNN_train(self, actions, scr_index):  # 在训练过程中使用随机采样，将过程的转移状态扩充到整个训练集和内
-        scr_index, new_feature = self.Buffer.sample(135)  # 随机采样
-        # TODO: 产生问题，怎么接入？？
         loss, accuracy, _ = self.train(actions, scr_index)
         return loss, accuracy
 
