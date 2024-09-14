@@ -34,17 +34,18 @@ parser.add_argument('--update_target_estimator_every', type=int, default=5)  # �
 parser.add_argument('--discount_factor', type=float, default=0.9)  # 折扣因子，用于计算未来奖励的现值。
 parser.add_argument('--max_sample_num', type=int, default=10)  # 最多选取十个数量的邻居选取动作
 parser.add_argument('--mlp_layers', type=list, default=[256, 128, 64])  # 定义qnet中MLP的每层神经元数量
-parser.add_argument('--max_episodes', type=int, default=10)  # 总周期数
-parser.add_argument('--max_timesteps', type=int, default=10)  # 每个周期填充 10 批次经验(10*135) 扩充节点状态为 135 + 100 * 135 种
+parser.add_argument('--max_episodes', type=int, default=5)  # 总周期数
+parser.add_argument('--max_timesteps', type=int, default=10)  # 每个周期填充 30 批次经验(30*135)
 
-parser.add_argument('--epochs', type=int, default=20)  # GNN训练轮次
+parser.add_argument('--epochs', type=int, default=50)  # GNN训练轮次
 args = parser.parse_args()
 
 
-def make_graph(epochs, test_accs):  # 创建折线图
+def make_graph(epochs, train_accs, test_accs):  # 创建折线图
+    plt.plot(epochs, train_accs, label='Training Accuracy')
     plt.plot(epochs, test_accs, label='Testing Accuracy')
     plt.legend()
-    plt.title('Testing Accuracy Over Epochs')
+    plt.title('Training and Testing Accuracy Over Epochs')
     plt.xlabel('Epochs')
     plt.ylabel('Accuracy')
     plt.yticks(np.arange(0, 1.1, 0.05))
@@ -89,7 +90,6 @@ def main(K=0):  # 这里的 K 应该传入数据集处理函数实现 K 折交�
             tag = episode
         print('Episode:', episode, "Val_Acc:", val_acc, "rewards:", Cumulative_rewards, 'DQN_Loss:', loss)  # 奖励，损失还是设计的不合适
     end = time.time()
-    print("一共拓展了 {} 种节点特征".format(env.Buffer.size()))
     print(f"agent training time: {end - start}")
     print("Training GNNs with learned RL agent")
 
@@ -102,23 +102,31 @@ def main(K=0):  # 这里的 K 应该传入数据集处理函数实现 K 折交�
                        weight_decay=args.weight_decay,
                        policy="")  # 环境初始化
     new_env.policy = best_policy
-    _, _ = new_env.reset()  # 重置环境状态，其实就初始化个网络参数的值
+    index, states = new_env.reset()  # 重置环境状态
+    train_accs = []
     test_accs = []
     epochs = np.arange(args.epochs)
     print("The episode: {} strategy guides GNN training".format(tag))
+    actions = new_env.policy.predict_action_sequences(index, states, new_env)
     start = time.time()
-    for i_episode in range(args.epochs):  # 使用训练好的最佳策略指导GNN计算 应训练 10次以上
+    for i_episode in range(args.epochs):  # 使用训练好的最佳策略指导GNN计算
         t = time.time()
-        test_acc = new_env.GNN_train()  # 仅仅执行一次训练，不计算其他参数
+        loss, train_accuracy = new_env.GNN_train(actions, index)  # 仅仅执行一次训练，不计算其他参数
+        _, test_acc = new_env.test()
+        train_accs.append(train_accuracy)
         test_accs.append(test_acc)
-        print(" The {}th time: {:03f} test_acc：{:03f}".format(i_episode, time.time() - t, test_acc))
+        print(" The {}th time: {:03f} train_loss:{}  train_acc: {:03f} test_acc：{:03f}".format(i_episode, time.time() - t, loss,  train_accuracy, test_acc))
     end = time.time()
     print(f"GNN training time: {end - start}")
-    return max(test_accs), epochs, test_accs
+    return max(test_accs), epochs, train_accs, test_accs
 
 
 if __name__ == '__main__':
-    # 期待实现 K 折交叉验证
-    max_test, epoch, test = main()
-    make_graph(epoch, test)
+    # K = 10  # 期待实现 K 折交叉验证
+    # for item in range(K):
+    #     print(f"Start{item} fold")
+    #     test_acc = main(K=item)
+    #     print("Test Accuracy:", test_acc)
+    max_test, epoch, train, test = main()
+    make_graph(epoch, train, test)
     print("Test best Accuracy:", max_test)
