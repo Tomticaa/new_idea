@@ -5,11 +5,10 @@ USER    ：JO
 IDE     ：PyCharm 
 File    ：agent.py
 Date    ：2024/9/2 下午5:12 
-Project ：new_idea 
+Project ：new_idea
 Project Description：
         定义 DQN 智能体：定义动作值函数，作用：将节点特征作为节点状态，输出动作为int；
-        TODO: 1，平衡原始特征与聚合之后特征的差异，抚平在 q 网络进行预测的过程中输入原始特征与聚合后的节点的特征后得到 q 值分布的差异；
-        TODO：2， 设置多尺度奖励，避免单一尺度奖励使简单达成目标使 q 网络不能学习到更具体的策略，纠正仅输出单一动作的缺点；
+        TODO：设置多尺度奖励，避免单一尺度奖励使简单达成目标使 q 网络不能学习到更具体的策略，纠正仅输出单一动作的缺点；
 """
 # -*- coding: UTF-8 -*-
 
@@ -101,7 +100,7 @@ class DQN:
         states = torch.tensor(states, dtype=torch.float).to(self.device)
         actions = torch.tensor(actions, dtype=torch.int64).view(-1, 1).to(self.device)  # 转化为列向量
         # TD误差: target_q_values = r + (1 - done) * alpha * max_q(s' , a')
-        # TODO：如果 done 总为 true 则 target_q_values = rewards，则要求拟合：q_values = rewards
+        # TODO：如果 done 总为 true 则 target_q_values = rewards，则要求拟合：q_values = rewards  本来就是状态值函数，对状态动作进行值评价
         target_q_values = torch.tensor(target_q_values, dtype=torch.float).view(-1, 1).to(self.device)
         q_values = self.qnet(states).gather(1, actions)  # 得到了每个状态批量中选定相应动作后对应的Q值
         # target_q_values = (self.alpha ** episode) * q_values + (1 - self.alpha ** episode) * target_q_values
@@ -147,14 +146,15 @@ class QAgent:
         src_index, states = env.reset()  # TODO： 初始化状态是否应该重置环境卷积模型参数
         # 执行一次智能体训练
         Cumulative_rewards = 0
+        rewards = 0
+        val_acc = 0.0
         for _ in range(total_time_steps):  # 训练时间步  TODO:添加进度条并显示奖励
-            actions = self.predict_action_sequences(src_index, states, env)  # 根据当前状态在q网络中形成最佳动作序列(已添加随机性)
-            (next_states, trans_index), rewards, dones, (val_acc, r) = env.step(actions, src_index)  # 执行动作为多重列表
-            transition = zip(states, actions[0], rewards, next_states, dones)  # 仅仅将第一层针对源节点采取的行动加入经验进行训练
+            actions = self.predict_action_sequences(src_index, states, env)
+            next_states, rewards, dones, (val_acc, r) = env.step(actions, src_index)
+            transition = zip(states, actions[0], rewards, next_states, dones)
             for ts in transition:
                 self.feed(ts)
             states = next_states  # 进行时间步 次的状态转移
-            src_index = trans_index
             # print("reward :{}".format(r))
             Cumulative_rewards += r
         loss = self.train()
@@ -178,13 +178,13 @@ class QAgent:
         for actions_sub_list in actions_list:
             actions = self.eval_step(new_states)  # 返回一个批次的预测动作
             # best_actions = [act if np.random.rand() > epsilon else np.random.randint(0, 10) for act in actions]
-            # TODO: 方便调试
+            # TODO: 为了方便调试
             best_actions = [5 if np.random.rand() > epsilon else np.random.randint(0, 10) for act in actions]
             actions_sub_list.extend(best_actions)
             sample_result = env.model.sampling(index, best_actions)  # 针对索引列表内节点使用预测出来的最佳采样数量策略进行采样
-            new_states = env.init_states[sample_result]  # TODO: 为什么每次将采样结果输入的新状态后得到的新动作都是一样的值？？因为新状态变为稀疏矩阵了！！！！！！！！！！
-            index = sample_result  # 传递采样结果索引到下一层  TODO: 原始预测动作皆为相同值，因为原始特征相较于聚合后加入的参数的特征存在明显差异
-        return actions_list  # 改造返回最佳动作的多重列表
+            new_states = env.init_states[sample_result]
+            index = sample_result
+        return actions_list
 
     def train(self):  # 执行训练
         states, actions, rewards, next_states, dones = self.memory.sample(self.batch_size)

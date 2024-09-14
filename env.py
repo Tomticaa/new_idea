@@ -16,8 +16,6 @@ import numpy as np
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.init as init
-import torch.nn.functional as F
-from scipy.spatial import cKDTree
 from sklearn.preprocessing import MinMaxScaler
 from collections import namedtuple
 from dataset import load_data, Data
@@ -48,7 +46,7 @@ class SageGCN(nn.Module):  # 定义图卷积层
 
     def forward(self, action, src_node_features, neighbor_node_features):  # action = actions[hop] 为 0~9
         neighbor_hidden = self.NeighborAggregator(action, neighbor_node_features)  # 聚合邻居特征
-        hidden = (src_node_features + neighbor_hidden) / 2  # TODO: 是否应该取平均
+        hidden = (src_node_features + neighbor_hidden) / 2  # TODO: 取平均还是取加权？
         if self.activation:  # 在中间层表示允许激活
             return self.activation(hidden)
         else:
@@ -95,24 +93,24 @@ class GraphSage(nn.Module):
         for neighbor_node in self.adj[sid]:  # 节点的每个邻居的Katz分数
             probabilities.append(self.core[neighbor_node])
         total = sum(probabilities)
-        normlized_probabilities = [prob / total for prob in probabilities]  # 归一化
-        return normlized_probabilities
+        norms_probabilities = [prob / total for prob in probabilities]  # 归一化
+        return norms_probabilities
 
-    def sampling(self, index, action):  # 这里 sample_num 内部元素值为0~9，对应采样动作 1~10
+    def sampling(self, index, action):
         result = []
         for i, sid in enumerate(index):
             sample_num = action[i] + 1
             neighbor_nodes = self.adj.get(sid, [])
             if len(neighbor_nodes) > 0:
                 probability = self.compute_probabilities(sid)
-                # res = np.random.choice(self.adj[sid], size=(sample_num,), replace=True, p=probability)  # size：需要采样的数量
+                # res = np.random.choice(self.adj[sid], size=sample_num, replace=True, p=probability)  # size：需要采样的数量
                 res = np.random.choice(self.adj[sid], size=sample_num)  # TODO：使用随机采样进行调试
             else:
                 res = []
             result.extend(res)
         return np.array(result)  # 返回采样结果的数组
 
-    def multi_hop_sampling(self, actions, index):  # 集成多重采样，采样结果特征提取，actions则为一个多重列表
+    def multi_hop_sampling(self, actions, index):
         sampling_result = [index]
         for k, action in enumerate(actions):
             hop_k_result = self.sampling(sampling_result[k], action)  # 返回对应层的采样结果数组
@@ -122,8 +120,7 @@ class GraphSage(nn.Module):
 
 
 class Sage_env:
-    def __init__(self, hid_dim, output_dim, num_layers, max_sample_num, lr, weight_decay, NUM_BATCH_PER_EPOCH,
-                 policy=""):
+    def __init__(self, hid_dim, output_dim, num_layers, max_sample_num, lr, weight_decay, policy=""):
         self.hid_dim = hid_dim
         self.output_dim = output_dim
         self.num_layers = num_layers
@@ -137,10 +134,8 @@ class Sage_env:
         self.past_performance = [0.0]  # 该两个变量用于计算前面的平均准确率，用于定义奖励
         self.baseline_experience = 5  # 过去五个批次
         self.last_sample = [0] * len(self.idx_train)  # TODO:储存过去一个时间步该批次节点对应采样数量的均值；初始化为采样的最少节点数量
-        # --------------------------------------------------------------------------------------
-        self.NUM_BATCH_PER_EPOCH = NUM_BATCH_PER_EPOCH  # 每轮训练执行多少个批次  TODO：没有用到
-        self.buffers = [[] * len(self.idx_train)]  # 用于存储每一批次所有时间步对应节点采样数量的均值
-
+        # self.NUM_BATCH_PER_EPOCH = NUM_BATCH_PER_EPOCH  # 每轮训练执行多少个批次
+        # self.buffers = [[] * len(self.idx_train)]  # 用于存储每一批次所有时间步对应节点采样数量的均值
         # 定义模型
         self.model = GraphSage(self.features.shape[1], hid_dim, output_dim, num_layers).to(DEVICE)  # 拟设定num_layers=2为图卷积层数
         self.optimizer = optim.Adam(self.model.parameters(), lr, weight_decay=weight_decay)
@@ -165,39 +160,30 @@ class Sage_env:
         self.model.initialize_weights()  # 仅仅清除线性层参数
 
     def step(self, actions, index):  # action：0~9 -> 采样数量 1~10
-        done = False
-        print('----------------------------------------------------------------')
         self.reset_parameters()
-        for _ in range(20):
+        print('-----------------------------------------------------------')
+        for _ in range(20):  # 每种状态训练 20 次
             loss, accuracy, pred_rights = self.train(actions, index)
             print("loss: ", loss, 'accuracy: ', accuracy.item())
-        # 在训练集上的分类损失达到 0.01 一下则设置为终止状态
-        # if loss < 0.01:  # plan3
-        #     done = True
-        # dones = [done] * len(actions[0])
         sample_num = actions[0]  # 获取原始节点采样数量 # TODO:设计为与上一时间步的对应节点采样数进行对比
-        dones = [True if i == 1 else False for i in pred_rights]  # TODO: 终止标志也应该合理计入
-        next_states, trans_index = self.state_transfer(actions, index)  # 使用执行动作更新参数得到的网络得到下一阶段状态
+        dones = [True if i == 1 else False for i in pred_rights]
+        next_states = self.state_transfer(actions, index)  # 使用执行动作更新参数得到的网络得到下一阶段状态
         val_acc = self.eval()  # 仅计算验证集准确率，用于选择合适的agent，所以验证集合内结点的选择应该具有代表测试集节点的能力
         baseline = np.mean(np.array(self.past_performance[-self.baseline_experience:]))
         self.past_performance.append(val_acc)
         train_acc_performance = [0.6 if i == 1 else 0 for i in pred_rights]
-
-        # 基础采样准确率为 一次agent训练的所有时间步长内节点多次采样的均值，仅在一此训练之后进行更新
         sample_num_performance = [0.06 * (x - y - 1) for x, y in zip(self.last_sample, sample_num)]
         val_acc_performance = val_acc - baseline
-        # 奖励设置优先以 训练集节点节点是否预测成功为首，若预测成功，则计算应逐步减少节点聚合数量？？
-        # TODO：设置多尺度奖励： r =  0.6 * (测试集分类准确率) + 0.2 * (当前批次节点聚合邻居数目相较于上一批次节点数目增量的负数) + 0.2 * (验证集相较于过去十个批次平均提升准确率是否上升)： 结合节点计算效率与准确性
-        rewards = [x + y + val_acc_performance for x, y in zip(train_acc_performance, sample_num_performance)]
+        rewards = [x + y + val_acc_performance for x, y in zip(train_acc_performance, sample_num_performance)]  # 应该使用平滑的奖励信号
         self.last_sample = sample_num  # 更新当前采样数量，应该一次训练一更新
         r = np.sum(np.array(rewards))  # 计算该轮次总计奖励
-        return (next_states, trans_index), rewards, dones, (val_acc, r)  # 返回平均准确率与平均奖励
+        return next_states, rewards, dones, (val_acc, r)  # 返回平均准确率与平均奖励
 
     def state_transfer(self, actions, index):
         _, next_states = self.model(actions, index, self.trans_features)
         next_states = self.Feature_preprocessing(next_states)  # 特征规范化处理模块
         self.trans_features[index] = next_states
-        return next_states, index
+        return next_states
 
     def GNN_train(self, actions, index):  # 在训练过程中使用随机采样，将过程的转移状态扩充到整个训练集和内
         loss, accuracy, _ = self.train(actions, index)
