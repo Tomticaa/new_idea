@@ -144,17 +144,17 @@ class QAgent:
         self.memory = Memory_RelayBuffer(memory_size=replay_memory_size)
 
     def learn(self, env, total_time_steps):  # 输入环境，在时间 t 内执行一次完整的强化学习过程，其中关于环境的各种定义在 Sage_env中获取
-        scr_index, states = env.reset()  # TODO： 初始化状态是否应该重置环境卷积模型参数
+        src_index, states = env.reset()  # TODO： 初始化状态是否应该重置环境卷积模型参数
         # 执行一次智能体训练
         Cumulative_rewards = 0
         for _ in range(total_time_steps):  # 训练时间步  TODO:添加进度条并显示奖励
-            actions = self.predict_action_sequences(scr_index, states, env)  # 根据当前状态在q网络中形成最佳动作序列(已添加随机性)
-            (next_states, trans_index), rewards, dones, (val_acc, r) = env.step(actions, scr_index)  # 执行动作为多重列表
+            actions = self.predict_action_sequences(src_index, states, env)  # 根据当前状态在q网络中形成最佳动作序列(已添加随机性)
+            (next_states, trans_index), rewards, dones, (val_acc, r) = env.step(actions, src_index)  # 执行动作为多重列表
             transition = zip(states, actions[0], rewards, next_states, dones)  # 仅仅将第一层针对源节点采取的行动加入经验进行训练
             for ts in transition:
                 self.feed(ts)
             states = next_states  # 进行时间步 次的状态转移
-            scr_index = trans_index
+            src_index = trans_index
             # print("reward :{}".format(r))
             Cumulative_rewards += r
         loss = self.train()

@@ -21,7 +21,7 @@ from agent import QAgent
 
 parser = argparse.ArgumentParser(description='AutoSage')
 # env definition=-
-parser.add_argument('--env_hid_dim', type=int, default=128)
+parser.add_argument('--env_hid_dim', type=int, default=128)  # TODO: 修改隐藏层维度改为列表
 parser.add_argument('--env_out_dim', type=int, default=7)
 parser.add_argument('--Sage_num_layers', type=int, default=2)  # 卷积层叠加层数(也为邻居采样的最大层数)
 parser.add_argument('--Sage_batch_size', type=int, default=135)  # 每批次训练节点数以及经验池采样数量
