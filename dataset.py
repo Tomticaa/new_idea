@@ -20,7 +20,7 @@ import numpy as np
 import pickle as pkl
 import os.path as osp
 from collections import namedtuple
-from sklearn.preprocessing import StandardScaler, MinMaxScaler
+from sklearn.preprocessing import MinMaxScaler
 
 Data = namedtuple('Data', ['adj', 'features', 'labels', 'idx_train', 'idx_val', 'idx_test', 'Katz_core'])
 
@@ -134,11 +134,11 @@ def load_data(path="./cora/cora_proceed/"):  # 装装载数据
 
 if __name__ == '__main__':
     adj, features, labels, idx_train, idx_val, idx_test, katz_core = load_data()
-    print("Adjacency's len: ", type(adj))
-    print("Node's feature shape: ", type(features))
-    print("Node's label shape: ", type(labels))
-    print("Number of training nodes: ", len(idx_train))
-    print("Number of validation nodes: ", len(idx_val))
-    print("Number of test nodes: ", len(idx_test))
-    print(len(katz_core))
-    print()
+    # print("Adjacency's len: ", type(adj))
+    # print("Node's feature shape: ", type(features))
+    # print("Node's label shape: ", type(labels))
+    # print("Number of training nodes: ", len(idx_train))
+    # print("Number of validation nodes: ", len(idx_val))
+    # print("Number of test nodes: ", len(idx_test))
+    # print(len(katz_core))
+    print(labels[:140])
